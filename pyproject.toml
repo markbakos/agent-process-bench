@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "apbench"
+version = "0.1.0"
+description = "Filesystem-first agent process experiment runner"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "pydantic>=2.7,<3",
+  "PyYAML>=6,<7",
+  "pandas>=2.2,<4",
+  "pyarrow>=16",
+  "radon>=6,<7",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10"]
+
+[project.scripts]
+apbench = "apbench.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["codex: opt-in test that consumes Codex account usage"]

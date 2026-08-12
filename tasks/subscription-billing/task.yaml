@@ -1,0 +1,18 @@
+schema_version: 1
+id: subscription-billing
+name: Subscription Billing Engine
+language: python
+rounds:
+  - {id: r00, requirement: requirements/r00.md, change_type: initial}
+  - {id: r01, requirement: requirements/r01.md, change_type: revision}
+  - {id: r02, requirement: requirements/r02.md, change_type: extension}
+  - {id: r03, requirement: requirements/r03.md, change_type: conflict}
+  - {id: r04, requirement: requirements/r04.md, change_type: revision}
+  - {id: r05, requirement: requirements/r05.md, change_type: conflict}
+  - {id: r06, requirement: requirements/r06.md, change_type: extension}
+evaluation:
+  command: [python, -B, evaluator/run.py, --workspace, "{workspace}", --round, "{round_id}", --output, "{output}"]
+repository_stats:
+  production_globs: ["src/**/*.py"]
+  test_globs: ["tests/**/*.py"]
+  exclude: [".git/**", "__pycache__/**", ".pytest_cache/**"]

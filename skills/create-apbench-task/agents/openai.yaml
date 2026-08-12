@@ -1,0 +1,4 @@
+interface:
+  display_name: "Create apbench Task"
+  short_description: "Create complete, valid apbench task packs"
+  default_prompt: "Use $create-apbench-task to add a complete task pack to this repository."
