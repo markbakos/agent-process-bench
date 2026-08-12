@@ -1,0 +1,23 @@
+schema_version: 1
+id: key-value-store-agent
+name: Key-value store agent process smoke task
+language: python
+rounds:
+  - id: r00
+    requirement: requirements/r00.md
+    change_type: initial
+  - id: r01
+    requirement: requirements/r01.md
+    change_type: extension
+  - id: r02
+    requirement: requirements/r02.md
+    change_type: revision
+  - id: r03
+    requirement: requirements/r03.md
+    change_type: conflict
+evaluation:
+  command: [python, evaluator/run.py, --workspace, "{workspace}", --round, "{round_id}", --output, "{output}"]
+repository_stats:
+  production_globs: ["src/**/*.py"]
+  test_globs: ["tests/**/*.py"]
+  exclude: [".git/**", "__pycache__/**", ".pytest_cache/**"]

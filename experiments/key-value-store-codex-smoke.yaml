@@ -1,0 +1,20 @@
+schema_version: 1
+id: key-value-store-codex-smoke
+model_profile: terra-medium
+agent_profile: standard
+processes:
+  - direct
+tasks:
+  - key-value-store-agent
+replicates: 1
+execution:
+  fresh_context_per_round: true
+  preserve_git_history: false
+  randomize_run_order: true
+  random_seed: 20260812
+  timeout_seconds: 1800
+measurements:
+  correctness: true
+  repository_stats: true
+  structural_erosion: true
+  maintenance_probe: false

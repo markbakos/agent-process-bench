@@ -1,0 +1,26 @@
+schema_version: 1
+id: smoke
+model_profile: fake
+agent_profile: standard
+processes:
+  - direct
+  - tdd
+tasks:
+  - key-value-store
+replicates: 2
+execution:
+  fresh_context_per_round: true
+  preserve_git_history: false
+  randomize_run_order: true
+  random_seed: 20260810
+  timeout_seconds: 30
+measurements:
+  correctness: true
+  repository_stats: true
+  structural_erosion: true
+  maintenance_probe: true
+maintenance:
+  model_profile: fake
+  agent_profile: neutral-maintainer
+  timeout_seconds: 30
+
