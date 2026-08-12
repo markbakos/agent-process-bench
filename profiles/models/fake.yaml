@@ -1,0 +1,8 @@
+id: fake
+engine: fake
+model: deterministic-fake
+reasoning_effort: none
+timeout_seconds: 30
+sandbox: workspace-write
+network_access: false
+
