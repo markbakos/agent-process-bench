@@ -66,6 +66,7 @@ class FakeEngine:
             {
                 "invocation_marker": marker,
                 "model_profile": model.id,
+                "timeout_seconds": model.timeout_seconds,
                 "prompt_sha256": prompt_hash,
                 "baseline_git_commit_count": commit_count,
             },
@@ -125,4 +126,28 @@ class FakeEngine:
 def engine_for(profile: ModelProfile) -> AgentEngine:
     if profile.engine == "fake":
         return FakeEngine()
-    raise ValueError(f"Unsupported engine '{profile.engine}' in Part 1")
+    if profile.engine == "codex":
+        from .codex import CodexEngine
+
+        return CodexEngine()
+    raise ValueError(f"Unsupported engine '{profile.engine}'")
+
+
+def engine_version(profile: ModelProfile) -> str:
+    if profile.engine == "fake":
+        return "deterministic-fake"
+    if profile.engine == "codex":
+        from .codex import codex_version
+
+        return codex_version()
+    raise ValueError(f"Unsupported engine '{profile.engine}'")
+
+
+def validate_engine(profile: ModelProfile) -> str:
+    if profile.engine == "fake":
+        return "deterministic-fake"
+    if profile.engine == "codex":
+        from .codex import validate_codex_profile
+
+        return validate_codex_profile(profile)
+    raise ValueError(f"Unsupported engine '{profile.engine}'")

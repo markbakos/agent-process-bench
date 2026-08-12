@@ -66,8 +66,6 @@ def load_experiment(path: Path) -> ResolvedExperiment:
     model = _model(ModelProfile, model_path)
     if model.id != manifest.model_profile:
         raise ConfigError(f"Model profile directory key '{manifest.model_profile}' does not match id '{model.id}'")
-    if model.engine != "fake":
-        raise ConfigError("Part 1 supports only engine: fake; Codex is reserved for Part 2")
 
     agent_path = root / "profiles" / "agents" / manifest.agent_profile / "instructions.md"
     _require_file(agent_path, f"Agent profile '{manifest.agent_profile}'")
@@ -105,8 +103,11 @@ def load_experiment(path: Path) -> ResolvedExperiment:
         maintenance_path = root / "profiles" / "models" / f"{manifest.maintenance.model_profile}.yaml"
         _require_file(maintenance_path, f"Maintenance model '{manifest.maintenance.model_profile}'")
         maintenance_model = _model(ModelProfile, maintenance_path)
-        if maintenance_model.engine != "fake":
-            raise ConfigError("Part 1 maintenance supports only engine: fake")
+        if maintenance_model.id != manifest.maintenance.model_profile:
+            raise ConfigError(
+                f"Maintenance model profile directory key '{manifest.maintenance.model_profile}' "
+                f"does not match id '{maintenance_model.id}'"
+            )
         maintenance_agent = root / "profiles" / "agents" / manifest.maintenance.agent_profile / "instructions.md"
         _require_file(maintenance_agent, f"Maintenance agent '{manifest.maintenance.agent_profile}'")
         maintenance_instructions = maintenance_agent.read_text(encoding="utf-8")
@@ -175,8 +176,29 @@ def stable_id(*parts: object) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
-def build_plan(experiment: ResolvedExperiment) -> list[Trajectory]:
+def build_plan(
+    experiment: ResolvedExperiment,
+    *,
+    task_ids: list[str] | None = None,
+    process_ids: list[str] | None = None,
+    replicates: list[int] | None = None,
+) -> list[Trajectory]:
     manifest = experiment.manifest
+    selected_tasks = set(task_ids or manifest.tasks)
+    selected_processes = set(process_ids or manifest.processes)
+    selected_replicates = set(replicates or range(1, manifest.replicates + 1))
+    unknown_tasks = selected_tasks.difference(manifest.tasks)
+    unknown_processes = selected_processes.difference(manifest.processes)
+    unknown_replicates = selected_replicates.difference(range(1, manifest.replicates + 1))
+    if unknown_tasks:
+        raise ConfigError(f"Unknown selected tasks: {', '.join(sorted(unknown_tasks))}")
+    if unknown_processes:
+        raise ConfigError(f"Unknown selected processes: {', '.join(sorted(unknown_processes))}")
+    if unknown_replicates:
+        raise ConfigError(
+            f"Selected replicates are outside 1..{manifest.replicates}: "
+            f"{', '.join(str(item) for item in sorted(unknown_replicates))}"
+        )
     items = [
         Trajectory(
             task_id=task_id,
@@ -190,7 +212,13 @@ def build_plan(experiment: ResolvedExperiment) -> list[Trajectory]:
     ]
     if manifest.execution.randomize_run_order:
         random.Random(manifest.execution.random_seed).shuffle(items)
-    return items
+    return [
+        item
+        for item in items
+        if item.task_id in selected_tasks
+        and item.process_id in selected_processes
+        and item.replicate in selected_replicates
+    ]
 
 
 def build_prompt(agent_instructions: str, process_instructions: str, requirement: str) -> str:

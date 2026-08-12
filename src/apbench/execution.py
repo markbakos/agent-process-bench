@@ -27,7 +27,7 @@ from .artifacts import (
     tree_hash,
 )
 from .config import build_plan, build_prompt, stable_id
-from .engines import AgentEngine, EngineInfrastructureError, engine_for
+from .engines import AgentEngine, EngineInfrastructureError, engine_for, engine_version, validate_engine
 from .models import EngineRunResult, ResolvedExperiment, Trajectory, UsageSummary
 
 
@@ -61,8 +61,7 @@ def _hash_text(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-def execution_plan_data(experiment: ResolvedExperiment) -> dict:
-    plan = build_plan(experiment)
+def execution_plan_data_for(experiment: ResolvedExperiment, plan: list[Trajectory]) -> dict:
     return {
         "experiment_id": experiment.manifest.id,
         "randomized": experiment.manifest.execution.randomize_run_order,
@@ -72,17 +71,7 @@ def execution_plan_data(experiment: ResolvedExperiment) -> dict:
 
 
 def experiment_lock_data(experiment: ResolvedExperiment) -> dict:
-    try:
-        commit = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=experiment.root, text=True, stderr=subprocess.DEVNULL
-        ).strip()
-        dirty = bool(
-            subprocess.check_output(
-                ["git", "status", "--porcelain"], cwd=experiment.root, text=True, stderr=subprocess.DEVNULL
-            ).strip()
-        )
-    except (OSError, subprocess.SubprocessError):
-        commit, dirty = None, True
+    commit, dirty = framework_git_state(experiment.root)
 
     task_data = {}
     for task_id, task in experiment.tasks.items():
@@ -101,7 +90,17 @@ def experiment_lock_data(experiment: ResolvedExperiment) -> dict:
         "experiment_manifest_sha256": sha256_file(experiment.manifest_path),
         "experiment": experiment.manifest.model_dump(mode="json"),
         "model": experiment.model.model_dump(mode="json"),
+        "engine_version": engine_version(experiment.model),
         "agent_instructions_sha256": _hash_text(experiment.agent_instructions),
+        "maintenance": (
+            {
+                "model": experiment.maintenance_model.model_dump(mode="json"),
+                "engine_version": engine_version(experiment.maintenance_model),
+                "agent_instructions_sha256": _hash_text(experiment.maintenance_instructions or ""),
+            }
+            if experiment.maintenance_model
+            else None
+        ),
         "processes": {
             key: {
                 "version": value.version,
@@ -127,26 +126,56 @@ def _write_once(path: Path, value: dict) -> None:
     atomic_write_json(path, value)
 
 
-def prepare_experiment(experiment: ResolvedExperiment) -> None:
+def framework_git_state(root: Path) -> tuple[str | None, bool]:
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True, stderr=subprocess.DEVNULL
+        ).strip()
+        dirty = bool(
+            subprocess.check_output(
+                ["git", "status", "--porcelain", "--untracked-files=all"],
+                cwd=root,
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+        )
+        return commit, dirty
+    except (OSError, subprocess.SubprocessError):
+        return None, True
+
+
+def prepare_experiment(experiment: ResolvedExperiment, plan: list[Trajectory] | None = None) -> None:
     root = experiment_dir(experiment)
     root.mkdir(parents=True, exist_ok=True)
     (root / "logs").mkdir(exist_ok=True)
     _write_once(root / "experiment-lock.json", experiment_lock_data(experiment))
-    _write_once(root / "execution-plan.json", execution_plan_data(experiment))
+    _write_once(
+        root / "execution-plan.json",
+        execution_plan_data_for(experiment, plan if plan is not None else build_plan(experiment)),
+    )
 
 
-def save_execution_plan(experiment: ResolvedExperiment) -> Path:
+def save_execution_plan(experiment: ResolvedExperiment, plan: list[Trajectory] | None = None) -> Path:
     path = experiment_dir(experiment) / "execution-plan.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    _write_once(path, execution_plan_data(experiment))
+    _write_once(
+        path,
+        execution_plan_data_for(experiment, plan if plan is not None else build_plan(experiment)),
+    )
     return path
 
 
-def _selected_checkpoint(round_path: Path) -> Path | None:
-    attempt = selected_attempt(round_path)
-    if attempt and attempt_complete(attempt):
-        return attempt / "checkpoint.tar.gz"
-    return None
+def saved_execution_plan(experiment: ResolvedExperiment) -> list[Trajectory]:
+    path = experiment_dir(experiment) / "execution-plan.json"
+    if not path.is_file():
+        return build_plan(experiment)
+    value = read_json(path).get("trajectories")
+    if not isinstance(value, list):
+        raise RuntimeError(f"Invalid execution plan: {path}")
+    try:
+        return [Trajectory(**item) for item in value]
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"Invalid execution plan: {path}") from exc
 
 
 def _protocol_violations(workspace: Path) -> list[str]:
@@ -164,15 +193,36 @@ def run_experiment(
     resume: bool = False,
     force: bool = False,
     engine: AgentEngine | None = None,
+    task_ids: list[str] | None = None,
+    process_ids: list[str] | None = None,
+    replicates: list[int] | None = None,
+    allow_dirty_framework: bool = False,
 ) -> None:
     if resume and force:
         raise ValueError("--resume and --force are mutually exclusive")
     root = experiment_dir(experiment)
     if not resume and not force and root.exists() and any(root.glob("trajectories/**/attempt-*")):
         raise RuntimeError(f"Experiment has existing attempts; use --resume or --force: {root}")
-    prepare_experiment(experiment)
+    commit, dirty = framework_git_state(experiment.root)
+    if not allow_dirty_framework and (commit is None or dirty):
+        raise RuntimeError(
+            "Framework working tree must be a clean Git checkout; use --allow-dirty-framework only for pilots"
+        )
+    validate_engine(experiment.model)
+    if experiment.maintenance_model:
+        validate_engine(experiment.maintenance_model)
+    if resume and task_ids is None and process_ids is None and replicates is None:
+        plan = saved_execution_plan(experiment)
+    else:
+        plan = build_plan(
+            experiment,
+            task_ids=task_ids,
+            process_ids=process_ids,
+            replicates=replicates,
+        )
+    prepare_experiment(experiment, plan)
     selected_engine = engine or engine_for(experiment.model)
-    for trajectory in build_plan(experiment):
+    for trajectory in plan:
         run_trajectory(experiment, trajectory, selected_engine, resume=resume, force=force)
 
 
@@ -260,10 +310,13 @@ def run_trajectory(
                 "change_type": round_spec.change_type,
             },
         )
+        resolved_model = experiment.model.model_copy(
+            update={"timeout_seconds": experiment.manifest.execution.timeout_seconds}
+        )
         atomic_write_json(
             attempt / "resolved-config.json",
             {
-                "model": experiment.model.model_dump(mode="json"),
+                "model": resolved_model.model_dump(mode="json"),
                 "timeout_seconds": experiment.manifest.execution.timeout_seconds,
             },
         )
@@ -279,7 +332,7 @@ def run_trajectory(
         )
         infrastructure_error = None
         try:
-            result = engine.run(workspace, prompt, experiment.model, attempt / "engine")
+            result = engine.run(workspace, prompt, resolved_model, attempt / "engine")
         except EngineInfrastructureError as exc:
             infrastructure_error = str(exc)
             result = EngineRunResult(
@@ -336,7 +389,7 @@ def status_summary(experiment: ResolvedExperiment) -> dict[str, int]:
         "maintenance_eligible": 0,
         "maintenance_complete": 0,
     }
-    for trajectory in build_plan(experiment):
+    for trajectory in saved_execution_plan(experiment):
         summary["trajectories"] += 1
         task = experiment.tasks[trajectory.task_id]
         complete = True

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import shutil
@@ -21,9 +22,9 @@ from .artifacts import (
     selected_attempt,
     tree_hash,
 )
-from .config import build_plan, build_prompt
+from .config import build_prompt
 from .engines import AgentEngine, EngineInfrastructureError, engine_for
-from .execution import experiment_dir, round_dir
+from .execution import experiment_dir, round_dir, saved_execution_plan
 from .models import ResolvedExperiment, RoundSpec, TaskManifest
 
 
@@ -106,7 +107,31 @@ def correctness(workspace: Path, task: TaskManifest, round_spec: RoundSpec, outp
         for value in task.evaluation.command
     ]
     try:
-        completed = subprocess.run(command, cwd=task.root, text=True, capture_output=True, check=False)
+        completed = subprocess.run(
+            command,
+            cwd=task.root,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=task.evaluation.timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else exc.stdout or ""
+        stderr = exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else exc.stderr or ""
+        atomic_write_text(output_dir / "evaluator-stdout.log", stdout)
+        atomic_write_text(output_dir / "evaluator-stderr.log", stderr)
+        return {
+            "evaluator_id": "correctness",
+            "evaluator_version": "1.0.0",
+            "created_at": now(),
+            "status": "timeout",
+            "correct": False,
+            "tests_passed": 0,
+            "tests_total": 0,
+            "build_status": "failed",
+            "exit_code": None,
+            "raw": {"status": "timeout", "error": "Evaluator exceeded its timeout"},
+        }
     except OSError as exc:
         atomic_write_text(output_dir / "evaluator-stdout.log", "")
         atomic_write_text(output_dir / "evaluator-stderr.log", str(exc) + "\n")
@@ -146,9 +171,14 @@ def correctness(workspace: Path, task: TaskManifest, round_spec: RoundSpec, outp
     }
 
 
-def evaluate_experiment(experiment: ResolvedExperiment, engine: AgentEngine | None = None) -> None:
+def evaluate_experiment(
+    experiment: ResolvedExperiment,
+    engine: AgentEngine | None = None,
+    *,
+    force: bool = False,
+) -> None:
     maintenance_engine = engine or (engine_for(experiment.maintenance_model) if experiment.maintenance_model else None)
-    for trajectory in build_plan(experiment):
+    for trajectory in saved_execution_plan(experiment):
         task = experiment.tasks[trajectory.task_id]
         for index, round_spec in enumerate(task.rounds):
             attempt = selected_attempt(round_dir(experiment, trajectory, index))
@@ -158,7 +188,7 @@ def evaluate_experiment(experiment: ResolvedExperiment, engine: AgentEngine | No
                 workspace = Path(temporary) / "workspace"
                 extract_checkpoint(attempt / "checkpoint.tar.gz", workspace)
                 correctness_path = attempt / "correctness-v1.json"
-                if not correctness_path.exists() and experiment.manifest.measurements.correctness:
+                if (force or not correctness_path.exists()) and experiment.manifest.measurements.correctness:
                     result = correctness(workspace, task, round_spec, attempt / "evaluator" / "correctness-v1")
                     atomic_write_json(correctness_path, result)
                 elif correctness_path.exists():
@@ -167,11 +197,11 @@ def evaluate_experiment(experiment: ResolvedExperiment, engine: AgentEngine | No
                     result = {"correct": False}
 
                 stats_path = attempt / "repository-stats-v1.json"
-                if not stats_path.exists() and experiment.manifest.measurements.repository_stats:
+                if (force or not stats_path.exists()) and experiment.manifest.measurements.repository_stats:
                     atomic_write_json(stats_path, repository_stats(workspace, task))
 
                 erosion_path = attempt / "structural-erosion-python-v1.json"
-                if not erosion_path.exists() and experiment.manifest.measurements.structural_erosion:
+                if (force or not erosion_path.exists()) and experiment.manifest.measurements.structural_erosion:
                     atomic_write_json(erosion_path, structural_erosion(workspace, task))
 
             if (
@@ -187,6 +217,7 @@ def evaluate_experiment(experiment: ResolvedExperiment, engine: AgentEngine | No
                     attempt,
                     task.rounds[index + 1],
                     maintenance_engine,
+                    force=force,
                 )
 
 
@@ -196,6 +227,8 @@ def run_maintenance_probe(
     source_attempt: Path,
     next_round: RoundSpec,
     engine: AgentEngine,
+    *,
+    force: bool = False,
 ) -> None:
     manifest = read_json(source_attempt / "round-manifest.json")
     source_hash = (source_attempt / "checkpoint-tree.sha256").read_text(encoding="utf-8").strip()
@@ -203,7 +236,7 @@ def run_maintenance_probe(
     key = maintenance_key(source_attempt)
     destination = maintenance_root / key
     status_path = destination / "status.json"
-    if status_path.exists() and read_json(status_path).get("state") == "completed":
+    if not force and status_path.exists() and read_json(status_path).get("state") == "completed":
         return
     if destination.exists():
         quarantine = maintenance_root / "quarantine"
@@ -231,8 +264,19 @@ def run_maintenance_probe(
             requirement,
         )
         atomic_write_text(destination / "prompt.txt", prompt)
+        atomic_write_text(destination / "prompt.sha256", hashlib.sha256(prompt.encode()).hexdigest() + "\n")
+        maintenance_model = experiment.maintenance_model.model_copy(
+            update={"timeout_seconds": experiment.manifest.maintenance.timeout_seconds}
+        )
+        atomic_write_json(
+            destination / "resolved-config.json",
+            {
+                "model": maintenance_model.model_dump(mode="json"),
+                "timeout_seconds": experiment.manifest.maintenance.timeout_seconds,
+            },
+        )
         try:
-            result = engine.run(workspace, prompt, experiment.maintenance_model, destination / "engine")
+            result = engine.run(workspace, prompt, maintenance_model, destination / "engine")
         except EngineInfrastructureError as exc:
             atomic_write_json(status_path, {"state": "failed_infrastructure", "error": str(exc), "finished_at": now()})
             raise

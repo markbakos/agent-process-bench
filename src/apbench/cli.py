@@ -10,6 +10,7 @@ from .aggregation import aggregate
 from .artifacts import atomic_write_text
 from .config import ConfigError, build_plan, load_experiment, load_task_manifest, validate_task
 from .evaluation import evaluate_experiment, validate_references
+from .engines import validate_engine
 from .execution import experiment_dir, run_experiment, save_execution_plan, status_summary
 
 
@@ -19,11 +20,17 @@ def parser() -> argparse.ArgumentParser:
     for name in ("validate", "plan", "evaluate", "aggregate", "status"):
         command = commands.add_parser(name)
         command.add_argument("experiment", type=Path)
+        if name == "plan":
+            _add_selection_arguments(command)
+        elif name == "evaluate":
+            command.add_argument("--force", action="store_true")
     run = commands.add_parser("run")
     run.add_argument("experiment", type=Path)
+    _add_selection_arguments(run)
     choice = run.add_mutually_exclusive_group()
     choice.add_argument("--resume", action="store_true")
     choice.add_argument("--force", action="store_true")
+    run.add_argument("--allow-dirty-framework", action="store_true")
     task = commands.add_parser("validate-task")
     task.add_argument("task", type=Path)
     task.add_argument("--references", action="store_true")
@@ -34,6 +41,12 @@ def parser() -> argparse.ArgumentParser:
     new_process.add_argument("name")
     new_process.add_argument("--root", type=Path, default=Path.cwd())
     return root
+
+
+def _add_selection_arguments(command: argparse.ArgumentParser) -> None:
+    command.add_argument("--task", dest="task_ids", action="append")
+    command.add_argument("--process", dest="process_ids", action="append")
+    command.add_argument("--replicate", dest="replicates", action="append", type=int)
 
 
 def _slug(value: str) -> str:
@@ -137,13 +150,21 @@ def main(argv: list[str] | None = None) -> int:
 
         experiment = load_experiment(args.experiment)
         if args.command == "validate":
+            validate_engine(experiment.model)
+            if experiment.maintenance_model:
+                validate_engine(experiment.maintenance_model)
             warnings = [warning for task in experiment.tasks.values() for warning in validate_task(task)]
             for warning in warnings:
                 print(f"WARNING: {warning}")
             print(f"Experiment '{experiment.manifest.id}' is valid")
         elif args.command == "plan":
-            plan = build_plan(experiment)
-            save_execution_plan(experiment)
+            plan = build_plan(
+                experiment,
+                task_ids=args.task_ids,
+                process_ids=args.process_ids,
+                replicates=args.replicates,
+            )
+            save_execution_plan(experiment, plan)
             rounds = sum(len(experiment.tasks[item.task_id].rounds) for item in plan)
             print(f"Experiment:   {experiment.manifest.id}")
             print(f"Model:        {experiment.model.model} / {experiment.model.reasoning_effort}")
@@ -155,10 +176,18 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Max seconds:  {rounds * experiment.manifest.execution.timeout_seconds}")
         elif args.command == "run":
             _configure_logging(experiment)
-            run_experiment(experiment, resume=args.resume, force=args.force)
+            run_experiment(
+                experiment,
+                resume=args.resume,
+                force=args.force,
+                task_ids=args.task_ids,
+                process_ids=args.process_ids,
+                replicates=args.replicates,
+                allow_dirty_framework=args.allow_dirty_framework,
+            )
             print(f"Completed experiment execution: {experiment.manifest.id}")
         elif args.command == "evaluate":
-            evaluate_experiment(experiment)
+            evaluate_experiment(experiment, force=args.force)
             print(f"Completed evaluation: {experiment.manifest.id}")
         elif args.command == "aggregate":
             csv_path, parquet_path = aggregate(experiment)

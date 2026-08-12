@@ -29,6 +29,7 @@ class RoundSpec(StrictModel):
 
 class EvaluationSpec(StrictModel):
     command: list[str] = Field(min_length=1)
+    timeout_seconds: int = Field(default=300, gt=0)
 
 
 class RepositoryStatsSpec(StrictModel):
@@ -146,4 +147,3 @@ class EngineRunResult(StrictModel):
     wall_time_seconds: float = Field(ge=0)
     usage: UsageSummary = Field(default_factory=UsageSummary)
     final_status: str | None = None
-

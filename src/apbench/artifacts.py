@@ -121,9 +121,11 @@ def extract_checkpoint(archive_path: Path, destination: Path) -> None:
 
 def initialize_git(workspace: Path) -> None:
     commands = [
-        ["git", "init", "-q"],
+        ["git", "init", "-q", "--template="],
         ["git", "config", "user.name", "apbench"],
         ["git", "config", "user.email", "apbench@invalid.local"],
+        ["git", "config", "core.hooksPath", "/dev/null"],
+        ["git", "config", "commit.gpgSign", "false"],
         ["git", "add", "."],
         ["git", "commit", "-q", "--allow-empty", "-m", "baseline"],
     ]

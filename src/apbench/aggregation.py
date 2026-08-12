@@ -6,8 +6,7 @@ from pathlib import Path
 import pandas as pd
 
 from .artifacts import atomic_write_text, maintenance_key, read_json, selected_attempt
-from .config import build_plan
-from .execution import experiment_dir, round_dir
+from .execution import experiment_dir, round_dir, saved_execution_plan
 from .models import ResolvedExperiment
 
 
@@ -27,7 +26,7 @@ COLUMNS = [
 
 def rows(experiment: ResolvedExperiment) -> list[dict]:
     result: list[dict] = []
-    for trajectory in build_plan(experiment):
+    for trajectory in saved_execution_plan(experiment):
         task = experiment.tasks[trajectory.task_id]
         final_index = len(task.rounds) - 1
         for index, round_spec in enumerate(task.rounds):
