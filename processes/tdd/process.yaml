@@ -1,0 +1,16 @@
+schema_version: 1
+
+id: tdd
+name: Test-driven development
+version: "pilot-1"
+
+controller: single-agent
+instructions: instructions.md
+
+expected_behaviors:
+  - tests_before_production_changes
+  - failing_test_before_implementation
+  - minimal_change_to_green
+  - refactor_only_when_green
+  - repeated_red_green_refactor_cycles
+  - final_regression_verification

@@ -1,0 +1,15 @@
+schema_version: 1
+
+id: iterative
+name: Iterative-incremental development
+version: "pilot-1"
+
+controller: single-agent
+instructions: instructions.md
+
+expected_behaviors:
+  - small_increment_cycles
+  - implementation_before_increment_verification
+  - verification_after_each_increment
+  - revision_between_cycles
+  - final_regression_verification

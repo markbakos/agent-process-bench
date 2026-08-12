@@ -1,0 +1,15 @@
+schema_version: 1
+
+id: plan-driven
+name: Plan-driven sequential development
+version: "pilot-1"
+
+controller: single-agent
+instructions: instructions.md
+
+expected_behaviors:
+  - analysis_before_implementation
+  - plan_before_production_changes
+  - persistent_plan_artifact
+  - implementation_before_verification
+  - distinct_verification_phase
